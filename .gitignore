@@ -6,4 +6,8 @@ CLAUDE.md
 data/
 output/
 
+# venv
+.venv/
+
+# Py
 __pycache__
