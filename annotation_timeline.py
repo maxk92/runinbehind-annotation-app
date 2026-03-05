@@ -29,6 +29,7 @@ class AnnotationTimeline(QWidget):
     segment_activated     = Signal(int)          # seg_idx in _seg_data list
     boundary_dragged      = Signal(int, str, int)   # seg_idx, side, frame
     boundary_committed    = Signal(int, str, int)
+    delete_requested      = Signal(int)          # seg_idx right-clicked
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -158,6 +159,19 @@ class AnnotationTimeline(QWidget):
         self._bg = None
         self._canvas.draw_idle()
 
+    def remove_segment(self, seg_idx: int) -> None:
+        if not (0 <= seg_idx < len(self._seg_data)):
+            return
+        entry = self._seg_data.pop(seg_idx)
+        entry["rect"].remove()
+        entry["text"].remove()
+        if self._active_idx == seg_idx:
+            self._active_idx = -1
+        elif self._active_idx > seg_idx:
+            self._active_idx -= 1
+        self._bg = None
+        self._canvas.draw_idle()
+
     def update_segment(self, seg_idx: int, label: str, color: str) -> None:
         """Update label text and fill colour (e.g. after player assignment)."""
         if not (0 <= seg_idx < len(self._seg_data)):
@@ -257,6 +271,13 @@ class AnnotationTimeline(QWidget):
         if event.button == 2:   # middle mouse — start pan
             self._pan_start_px   = event.x
             self._pan_start_xlim = self._ax.get_xlim()
+            return
+        if event.button == 3:   # right-click — context menu on segment
+            x = event.xdata
+            if x is not None:
+                body_idx = self._hit_segment_body(x)
+                if body_idx >= 0:
+                    self.delete_requested.emit(body_idx)
             return
         if event.button != 1:
             return

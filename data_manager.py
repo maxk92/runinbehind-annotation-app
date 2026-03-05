@@ -156,6 +156,11 @@ class DataManager:
             return seg
         return None
 
+    def remove_segment(self, seg_idx: int) -> Optional[Segment]:
+        if 0 <= seg_idx < len(self.segments):
+            return self.segments.pop(seg_idx)
+        return None
+
     def assign_player(self, seg_idx: int, player_name: str,
                       player_jid: str, team: str) -> None:
         if 0 <= seg_idx < len(self.segments):

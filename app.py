@@ -12,7 +12,7 @@ import os
 import sys
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QCursor
 from PySide6.QtWidgets import (
     QApplication,
     QColorDialog,
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSizePolicy,
@@ -214,6 +215,7 @@ class MainWindow(QMainWindow):
         self._timeline.segment_activated.connect(self._on_segment_activated)
         self._timeline.boundary_dragged.connect(self._on_boundary_dragged)
         self._timeline.boundary_committed.connect(self._on_boundary_committed)
+        self._timeline.delete_requested.connect(self._on_delete_requested)
         self._pitch_panel.player_clicked.connect(self._on_player_clicked)
 
         self.setStatusBar(QStatusBar(self))
@@ -493,6 +495,34 @@ class MainWindow(QMainWindow):
                 f"Player: {seg.player_name or '—'}  "
                 "Click a player to assign.", 0
             )
+
+    # ------------------------------------------------------------------
+    # Segment deletion
+    # ------------------------------------------------------------------
+
+    def _delete_segment(self, seg_idx: int) -> None:
+        if not (0 <= seg_idx < len(self._dm.segments)):
+            return
+        seg = self._dm.remove_segment(seg_idx)
+        self._timeline.remove_segment(seg_idx)
+        if self._active_seg_idx == seg_idx:
+            self._active_seg_idx = -1
+        elif self._active_seg_idx > seg_idx:
+            self._active_seg_idx -= 1
+        self.statusBar().showMessage(f"Deleted segment #{seg.segment_id}.", 3000)
+        self._update_seg_info()
+
+    def _on_delete_requested(self, seg_idx: int) -> None:
+        menu = QMenu(self)
+        act_delete = menu.addAction("Delete segment")
+        if menu.exec(QCursor.pos()) == act_delete:
+            self._delete_segment(seg_idx)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Delete and self._active_seg_idx >= 0:
+            self._delete_segment(self._active_seg_idx)
+        else:
+            super().keyPressEvent(event)
 
     # ------------------------------------------------------------------
     # Boundary drag
