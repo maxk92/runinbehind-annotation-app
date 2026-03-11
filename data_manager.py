@@ -13,6 +13,14 @@ import numpy as np
 from config import FPS, OUTPUT_DIR, TRAIL_STEPS
 
 
+def _isnan(val) -> bool:
+    """Return True if val is a float NaN (handles strings and other types)."""
+    try:
+        return np.isnan(float(val))
+    except (TypeError, ValueError):
+        return False
+
+
 @dataclass
 class Segment:
     segment_id:  int
@@ -179,10 +187,48 @@ class DataManager:
             s.end_frame = min(self.last_frame, max(s.start_frame + 1, frame))
 
     # ------------------------------------------------------------------
+    # Loading annotations
+    # ------------------------------------------------------------------
+
+    def load_annotations(self, csv_path: str) -> list[Segment]:
+        """Read a previously saved CSV and append its segments to the current list.
+
+        Returns the list of newly added Segment objects.
+        Existing segment IDs are preserved from the file; _next_id is bumped
+        so that any subsequent add_segment() call won't collide.
+        """
+        import pandas as pd
+
+        df = pd.read_csv(csv_path)
+        required = {"segment_id", "start_frame", "end_frame"}
+        missing = required - set(df.columns)
+        if missing:
+            raise ValueError(f"CSV is missing required columns: {missing}")
+
+        new_segs: list[Segment] = []
+        for _, row in df.iterrows():
+            seg = Segment(
+                segment_id  = int(row["segment_id"]),
+                start_frame = int(row["start_frame"]),
+                end_frame   = int(row["end_frame"]),
+                player_name = str(row["player"])     if "player"     in row and not _isnan(row["player"])     else "",
+                player_jid  = str(row["player_jid"]) if "player_jid" in row and not _isnan(row["player_jid"]) else "",
+                team        = str(row["team"])        if "team"       in row and not _isnan(row["team"])       else "",
+            )
+            self.segments.append(seg)
+            new_segs.append(seg)
+
+        if self.segments:
+            self._next_id = max(s.segment_id for s in self.segments) + 1
+
+        return new_segs
+
+    # ------------------------------------------------------------------
     # Saving
     # ------------------------------------------------------------------
 
     def save(self, custom_path: str = "") -> str:
+        import datetime
         import pandas as pd
 
         rows = [
@@ -207,8 +253,10 @@ class DataManager:
             out_path = custom_path
         else:
             os.makedirs(OUTPUT_DIR, exist_ok=True)
-            stem     = os.path.splitext(os.path.basename(self._positions_path))[0]
-            out_path = os.path.join(OUTPUT_DIR, f"{stem}_{self.half}_rib.csv")
+            stem      = os.path.splitext(os.path.basename(self._positions_path))[0]
+            match_id  = stem.split("_")[-1]
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            out_path  = os.path.join(OUTPUT_DIR, f"{match_id}_{timestamp}.csv")
 
         df.to_csv(out_path, index=False)
         return out_path

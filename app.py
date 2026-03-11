@@ -150,6 +150,12 @@ class MainWindow(QMainWindow):
         self._btn_undo.clicked.connect(self._on_undo)
         ctrl_row.addWidget(self._btn_undo)
 
+        btn_load_annot = QPushButton("Load Annotations", self)
+        btn_load_annot.setFixedWidth(130)
+        btn_load_annot.setToolTip("Load a previously saved annotation CSV")
+        btn_load_annot.clicked.connect(self._on_load_annotations)
+        ctrl_row.addWidget(btn_load_annot)
+
         btn_save = QPushButton("Save", self)
         btn_save.setFixedWidth(80)
         btn_save.clicked.connect(self._on_save)
@@ -534,6 +540,39 @@ class MainWindow(QMainWindow):
 
     def _on_boundary_committed(self, seg_idx: int, side: str, frame: int) -> None:
         self._dm.update_boundary(seg_idx, side, frame)
+        self._update_seg_info()
+
+    # ------------------------------------------------------------------
+    # Load annotations
+    # ------------------------------------------------------------------
+
+    def _on_load_annotations(self) -> None:
+        if self._dm.xy_home is None:
+            self.statusBar().showMessage("Load position data first.", 3000)
+            return
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Annotation CSV", "", "CSV files (*.csv);;All files (*)"
+        )
+        if not path:
+            return
+
+        try:
+            new_segs = self._dm.load_annotations(path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Load annotations failed", str(exc))
+            return
+
+        for seg in new_segs:
+            color = self._team_color(seg.team) if seg.team else "#AAAAAA"
+            label = seg.player_jid or ""
+            self._timeline.add_segment(
+                seg.start_frame, seg.end_frame, seg.segment_id, label, color
+            )
+
+        self.statusBar().showMessage(
+            f"Loaded {len(new_segs)} annotation(s) from {os.path.basename(path)}", 5000
+        )
         self._update_seg_info()
 
     # ------------------------------------------------------------------

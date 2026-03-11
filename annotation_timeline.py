@@ -17,8 +17,8 @@ import matplotlib.patches as mpatches
 import matplotlib.transforms as mtransforms
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
-from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import QScrollBar, QSizePolicy, QVBoxLayout, QWidget
 
 from config import BOUNDARY_THRESHOLD_PX
 
@@ -82,9 +82,45 @@ class AnnotationTimeline(QWidget):
         self._canvas.mpl_connect("button_release_event",self._on_release)
         self._canvas.mpl_connect("scroll_event",        self._on_scroll)
 
+        self._scrollbar = QScrollBar(Qt.Orientation.Horizontal, self)
+        self._scrollbar.setMinimum(0)
+        self._scrollbar.setMaximum(0)
+        self._scrollbar.setVisible(False)
+        self._scrollbar.valueChanged.connect(self._on_scrollbar_changed)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         layout.addWidget(self._canvas)
+        layout.addWidget(self._scrollbar)
+
+    # ------------------------------------------------------------------
+    # Scrollbar sync
+    # ------------------------------------------------------------------
+
+    def _sync_scrollbar(self) -> None:
+        """Update the scrollbar to reflect the current visible xlim."""
+        left, right = self._ax.get_xlim()
+        span  = right - left
+        total = self._data_last - self._data_first
+        self._scrollbar.blockSignals(True)
+        self._scrollbar.setMinimum(0)
+        self._scrollbar.setMaximum(max(0, int(total - span)))
+        self._scrollbar.setPageStep(max(1, int(span)))
+        self._scrollbar.setValue(max(0, int(left - self._data_first)))
+        self._scrollbar.blockSignals(False)
+        self._scrollbar.setVisible(span < total - 1)
+
+    def _on_scrollbar_changed(self, value: int) -> None:
+        """Pan the view to match the scrollbar position."""
+        left, right = self._ax.get_xlim()
+        span = right - left
+        new_left  = float(self._data_first + value)
+        new_right = new_left + span
+        self._ax.set_xlim(new_left, new_right)
+        self._bg = None
+        self._canvas.draw_idle()
+        self.visible_range_changed.emit(int(new_left), int(new_right))
 
     # ------------------------------------------------------------------
     # Blit cache
@@ -114,6 +150,7 @@ class AnnotationTimeline(QWidget):
         self._ax.set_xlim(first, last)
         self._bg = None
         self._canvas.draw_idle()
+        self._sync_scrollbar()
 
     def set_xlim(self, first: int, last: int) -> None:
         if first >= last:
@@ -121,6 +158,7 @@ class AnnotationTimeline(QWidget):
         self._ax.set_xlim(first, last)
         self._bg = None
         self._canvas.draw_idle()
+        self._sync_scrollbar()
 
     # ------------------------------------------------------------------
     # Segment management
@@ -314,6 +352,7 @@ class AnnotationTimeline(QWidget):
                 self._ax.set_xlim(left, right)
                 self._bg = None
                 self._canvas.draw_idle()
+                self._sync_scrollbar()
                 self.visible_range_changed.emit(int(left), int(right))
             return
 
@@ -383,4 +422,5 @@ class AnnotationTimeline(QWidget):
         self._ax.set_xlim(new_left, new_right)
         self._bg = None
         self._canvas.draw_idle()
+        self._sync_scrollbar()
         self.visible_range_changed.emit(int(new_left), int(new_right))
