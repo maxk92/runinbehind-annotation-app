@@ -156,6 +156,37 @@ output/{positions_filename}_{half}_rib.csv
 
 ---
 
+## Packaging for macOS (standalone .app)
+
+Build the app bundle **on a macOS machine** using PyInstaller:
+
+```bash
+cd rib-annotation-app
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pip install pyinstaller
+pyinstaller rib_annotation_app_mac.spec
+```
+
+The output is `dist/RibAnnotationApp.app`. Zip it and share it — users drag it to
+`/Applications` and double-click. No Python installation needed.
+
+> **Gatekeeper warning**: Unsigned `.app` bundles will show a "can't be opened" dialog
+> on first launch. Users can bypass this by right-clicking the app and choosing **Open**.
+> To avoid this permanently, the app must be signed and notarized with an Apple Developer
+> ID (requires an Apple Developer account).
+>
+> **Apple Silicon vs Intel**: By default the build targets the native architecture of
+> the Mac you build on. To produce a universal binary that runs on both Intel and Apple
+> Silicon, set `target_arch='universal2'` in `rib_annotation_app_mac.spec`. This requires
+> that all dependencies have universal wheels available.
+>
+> If the bundled build fails to parse XML files, ensure `"lxml._elementpath"` and
+> `"lxml.etree"` are listed in `hiddenimports` in the spec (already included).
+
+---
+
 ## Packaging for Windows (standalone .exe)
 
 Build the executable **on a Windows machine** using PyInstaller:
