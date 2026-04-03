@@ -48,9 +48,10 @@ class MainWindow(QMainWindow):
         self._dm = DataManager()
 
         # Annotation state
-        self._annotating:    bool = False
-        self._pending_start: int  = -1
-        self._pending_player: dict | None = None   # player clicked while annotating
+        self._annotating:      bool = False
+        self._pending_start:   int  = -1
+        self._pending_player:  dict | None = None   # player clicked while annotating
+        self._pending_outcome: str  = ""            # outcome selected while annotating
 
         # Post-annotation state
         self._active_seg_idx: int = -1   # segment activated for player assignment
@@ -187,6 +188,25 @@ class MainWindow(QMainWindow):
         self._btn_annotate.setStyleSheet("font-size: 13px;")
         self._btn_annotate.clicked.connect(self._on_annotate)
         annot_row.addWidget(self._btn_annotate)
+
+        annot_row.addSpacing(12)
+
+        self._btn_running = QPushButton("Running Player Received", self)
+        self._btn_running.setMinimumHeight(38)
+        self._btn_running.setStyleSheet("font-size: 12px;")
+        self._btn_running.setVisible(False)
+        self._btn_running.clicked.connect(self._on_outcome_running)
+        annot_row.addWidget(self._btn_running)
+
+        annot_row.addSpacing(4)
+
+        self._btn_other = QPushButton("Other Player Received", self)
+        self._btn_other.setMinimumHeight(38)
+        self._btn_other.setStyleSheet("font-size: 12px;")
+        self._btn_other.setVisible(False)
+        self._btn_other.clicked.connect(self._on_outcome_other)
+        annot_row.addWidget(self._btn_other)
+
         annot_row.addStretch()
         vid_layout.addLayout(annot_row)
 
@@ -325,12 +345,14 @@ class MainWindow(QMainWindow):
         self._half_combo.blockSignals(False)
 
         # Reset state
-        self._annotating     = False
-        self._pending_start  = -1
-        self._pending_player = None
-        self._active_seg_idx = -1
+        self._annotating      = False
+        self._pending_start   = -1
+        self._pending_player  = None
+        self._pending_outcome = ""
+        self._active_seg_idx  = -1
         self._btn_annotate.setText("▶  Start Segment")
         self._btn_annotate.setStyleSheet("font-size: 13px;")
+        self._update_outcome_buttons()
 
         # Init pitch
         home_jids = self._dm.get_jersey_ids("Home")
@@ -383,12 +405,13 @@ class MainWindow(QMainWindow):
 
         if not self._annotating:
             # Start
-            self._pending_start  = max(self._dm.first_frame,
-                                       min(self._dm.last_frame,
-                                           self._video_panel.current_frame()))
-            self._pending_player = None
-            self._annotating     = True
-            self._active_seg_idx = -1        # deactivate any active segment
+            self._pending_start   = max(self._dm.first_frame,
+                                        min(self._dm.last_frame,
+                                            self._video_panel.current_frame()))
+            self._pending_player  = None
+            self._pending_outcome = ""
+            self._annotating      = True
+            self._active_seg_idx  = -1        # deactivate any active segment
             self._timeline.set_active_segment(-1)
             self._btn_annotate.setText("■  End Segment")
             self._btn_annotate.setStyleSheet(
@@ -396,6 +419,7 @@ class MainWindow(QMainWindow):
                 "font-size: 13px; font-weight: bold;"
             )
             self._timeline.set_pending_start(self._pending_start)
+            self._update_outcome_buttons()
             self.statusBar().showMessage(
                 f"Recording… start frame {self._pending_start}.  "
                 "Click a player on the pitch to assign, then 'End Segment'.", 0
@@ -420,14 +444,19 @@ class MainWindow(QMainWindow):
                 label = pp["jID"]
                 self._dm.assign_player(seg_idx, pp["player"], pp["jID"], pp["team"])
 
+            if self._pending_outcome:
+                self._dm.assign_outcome(seg_idx, self._pending_outcome)
+
             self._timeline.clear_pending_start()
             self._timeline.add_segment(start, end, seg.segment_id, label, color)
 
-            self._annotating     = False
-            self._pending_start  = -1
-            self._pending_player = None
+            self._annotating      = False
+            self._pending_start   = -1
+            self._pending_player  = None
+            self._pending_outcome = ""
             self._btn_annotate.setText("▶  Start Segment")
             self._btn_annotate.setStyleSheet("font-size: 13px;")
+            self._update_outcome_buttons()
 
             dur = (end - start) / FPS
             player_str = f"  [{label}]" if label else ""
@@ -439,12 +468,14 @@ class MainWindow(QMainWindow):
 
     def _on_undo(self) -> None:
         if self._annotating:
-            self._annotating     = False
-            self._pending_start  = -1
-            self._pending_player = None
+            self._annotating      = False
+            self._pending_start   = -1
+            self._pending_player  = None
+            self._pending_outcome = ""
             self._btn_annotate.setText("▶  Start Segment")
             self._btn_annotate.setStyleSheet("font-size: 13px;")
             self._timeline.clear_pending_start()
+            self._update_outcome_buttons()
             self.statusBar().showMessage("Annotation cancelled.", 3000)
             return
 
@@ -452,11 +483,54 @@ class MainWindow(QMainWindow):
         if seg is not None:
             if self._active_seg_idx == len(self._dm.segments):
                 self._active_seg_idx = -1
+                self._update_outcome_buttons()
             self._timeline.remove_last_segment()
             self.statusBar().showMessage(f"Removed segment #{seg.segment_id}.", 3000)
         else:
             self.statusBar().showMessage("No segments to undo.", 3000)
         self._update_seg_info()
+
+    # ------------------------------------------------------------------
+    # Outcome buttons
+    # ------------------------------------------------------------------
+
+    def _update_outcome_buttons(self) -> None:
+        """Show/hide and style the outcome toggle buttons based on active state."""
+        active = self._annotating or self._active_seg_idx >= 0
+        self._btn_running.setVisible(active)
+        self._btn_other.setVisible(active)
+        if not active:
+            return
+        if self._annotating:
+            outcome = self._pending_outcome
+        else:
+            outcome = self._dm.segments[self._active_seg_idx].outcome
+        self._style_outcome_btn(self._btn_running, outcome == "running_player_received")
+        self._style_outcome_btn(self._btn_other,   outcome == "other_player_received")
+
+    @staticmethod
+    def _style_outcome_btn(btn: QPushButton, selected: bool) -> None:
+        if selected:
+            btn.setStyleSheet(
+                "background-color: #27AE60; color: white; "
+                "font-size: 12px; font-weight: bold;"
+            )
+        else:
+            btn.setStyleSheet("font-size: 12px;")
+
+    def _on_outcome_running(self) -> None:
+        self._toggle_outcome("running_player_received")
+
+    def _on_outcome_other(self) -> None:
+        self._toggle_outcome("other_player_received")
+
+    def _toggle_outcome(self, value: str) -> None:
+        if self._annotating:
+            self._pending_outcome = "" if self._pending_outcome == value else value
+        elif self._active_seg_idx >= 0:
+            seg = self._dm.segments[self._active_seg_idx]
+            seg.outcome = "" if seg.outcome == value else value
+        self._update_outcome_buttons()
 
     # ------------------------------------------------------------------
     # Player assignment
@@ -493,6 +567,7 @@ class MainWindow(QMainWindow):
 
     def _on_segment_activated(self, seg_idx: int) -> None:
         self._active_seg_idx = seg_idx
+        self._update_outcome_buttons()
         if 0 <= seg_idx < len(self._dm.segments):
             seg = self._dm.segments[seg_idx]
             self.statusBar().showMessage(
@@ -513,6 +588,7 @@ class MainWindow(QMainWindow):
         self._timeline.remove_segment(seg_idx)
         if self._active_seg_idx == seg_idx:
             self._active_seg_idx = -1
+            self._update_outcome_buttons()
         elif self._active_seg_idx > seg_idx:
             self._active_seg_idx -= 1
         self.statusBar().showMessage(f"Deleted segment #{seg.segment_id}.", 3000)

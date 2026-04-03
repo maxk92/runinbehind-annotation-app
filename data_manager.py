@@ -30,6 +30,7 @@ class Segment:
     player_name: str  = ""
     player_jid:  str  = ""
     team:        str  = ""
+    outcome:     str  = ""    # "running_player_received" | "other_player_received" | ""
 
 
 class DataManager:
@@ -177,6 +178,10 @@ class DataManager:
             s.player_jid  = player_jid
             s.team        = team
 
+    def assign_outcome(self, seg_idx: int, outcome: str) -> None:
+        if 0 <= seg_idx < len(self.segments):
+            self.segments[seg_idx].outcome = outcome
+
     def update_boundary(self, seg_idx: int, side: str, frame: int) -> None:
         if not (0 <= seg_idx < len(self.segments)):
             return
@@ -207,6 +212,7 @@ class DataManager:
 
         new_segs: list[Segment] = []
         for _, row in df.iterrows():
+            outcome_raw = str(row["outcome"]) if "outcome" in row and not _isnan(row["outcome"]) else "none_received"
             seg = Segment(
                 segment_id  = int(row["segment_id"]),
                 start_frame = int(row["start_frame"]),
@@ -214,6 +220,7 @@ class DataManager:
                 player_name = str(row["player"])     if "player"     in row and not _isnan(row["player"])     else "",
                 player_jid  = str(row["player_jid"]) if "player_jid" in row and not _isnan(row["player_jid"]) else "",
                 team        = str(row["team"])        if "team"       in row and not _isnan(row["team"])       else "",
+                outcome     = "" if outcome_raw == "none_received" else outcome_raw,
             )
             self.segments.append(seg)
             new_segs.append(seg)
@@ -243,6 +250,7 @@ class DataManager:
                 "player":            s.player_name,
                 "player_jid":        s.player_jid,
                 "team":              s.team,
+                "outcome":           s.outcome if s.outcome else "none_received",
                 "annotation_source": "manual",
             }
             for s in self.segments

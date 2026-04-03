@@ -82,6 +82,8 @@ class AnnotationTimeline(QWidget):
         self._canvas.mpl_connect("button_release_event",self._on_release)
         self._canvas.mpl_connect("scroll_event",        self._on_scroll)
 
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+
         self._scrollbar = QScrollBar(Qt.Orientation.Horizontal, self)
         self._scrollbar.setMinimum(0)
         self._scrollbar.setMaximum(0)
@@ -109,7 +111,7 @@ class AnnotationTimeline(QWidget):
         self._scrollbar.setPageStep(max(1, int(span)))
         self._scrollbar.setValue(max(0, int(left - self._data_first)))
         self._scrollbar.blockSignals(False)
-        self._scrollbar.setVisible(span < total - 1)
+        self._scrollbar.setVisible(bool(span < total - 1))
 
     def _on_scrollbar_changed(self, value: int) -> None:
         """Pan the view to match the scrollbar position."""
@@ -306,6 +308,7 @@ class AnnotationTimeline(QWidget):
     def _on_press(self, event) -> None:
         if event.inaxes is not self._ax:
             return
+        self.setFocus()
         if event.button == 2:   # middle mouse — start pan
             self._pan_start_px   = event.x
             self._pan_start_xlim = self._ax.get_xlim()
@@ -405,15 +408,14 @@ class AnnotationTimeline(QWidget):
         entry["text"].set_x((start + end) / 2)
 
     # ------------------------------------------------------------------
-    # Scroll-wheel zoom
+    # Zoom (scroll-wheel + keyboard)
     # ------------------------------------------------------------------
 
-    def _on_scroll(self, event) -> None:
-        if event.inaxes is not self._ax:
-            return
-        factor    = 1.15 if event.step > 0 else 1 / 1.15
+    def _apply_zoom(self, factor: float, anchor: float | None = None) -> None:
+        """Zoom in (factor > 1) or out (factor < 1) around anchor (data units)."""
         left, right = self._ax.get_xlim()
-        anchor    = event.xdata if event.xdata is not None else (left + right) / 2
+        if anchor is None:
+            anchor = (left + right) / 2
         half_span = (right - left) / 2
         new_left  = max(float(self._data_first), anchor - half_span / factor)
         new_right = min(float(self._data_last),  anchor + half_span / factor)
@@ -424,3 +426,22 @@ class AnnotationTimeline(QWidget):
         self._canvas.draw_idle()
         self._sync_scrollbar()
         self.visible_range_changed.emit(int(new_left), int(new_right))
+
+    def _on_scroll(self, event) -> None:
+        if event.inaxes is not self._ax:
+            return
+        # event.button is 'up' or 'down' — reliable across platforms.
+        # Scroll up → zoom in (factor > 1), scroll down → zoom out (factor < 1).
+        zoom_in = (event.button == 'up')
+        factor  = 1.15 if zoom_in else 1 / 1.15
+        anchor  = event.xdata if event.xdata is not None else None
+        self._apply_zoom(factor, anchor)
+
+    def keyPressEvent(self, event) -> None:
+        key = event.key()
+        if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
+            self._apply_zoom(1.15)
+        elif key == Qt.Key.Key_Minus:
+            self._apply_zoom(1 / 1.15)
+        else:
+            super().keyPressEvent(event)

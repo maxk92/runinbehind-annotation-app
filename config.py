@@ -1,8 +1,19 @@
 import os
+import pathlib
+import sys
 
 FPS = 25
 
-OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+
+def _get_output_dir() -> str:
+    if getattr(sys, 'frozen', False):
+        # Packaged (PyInstaller) — write to user's Documents for easy access
+        return str(pathlib.Path.home() / "Documents" / "RibAnnotationApp" / "output")
+    # Running from source — keep output/ next to the script
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+
+
+OUTPUT_DIR = _get_output_dir()
 
 PITCH_LENGTH = 105.0
 PITCH_WIDTH  = 68.0
