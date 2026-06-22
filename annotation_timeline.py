@@ -185,8 +185,7 @@ class AnnotationTimeline(QWidget):
             {"rect": rect, "text": text, "start": start, "end": end,
              "seg_id": seg_id, "color": color}
         )
-        self._bg = None
-        self._canvas.draw_idle()
+        self._recalculate_lanes()
 
     def remove_last_segment(self) -> None:
         if not self._seg_data:
@@ -196,8 +195,7 @@ class AnnotationTimeline(QWidget):
         entry["text"].remove()
         if self._active_idx >= len(self._seg_data):
             self._active_idx = -1
-        self._bg = None
-        self._canvas.draw_idle()
+        self._recalculate_lanes()
 
     def remove_segment(self, seg_idx: int) -> None:
         if not (0 <= seg_idx < len(self._seg_data)):
@@ -209,8 +207,7 @@ class AnnotationTimeline(QWidget):
             self._active_idx = -1
         elif self._active_idx > seg_idx:
             self._active_idx -= 1
-        self._bg = None
-        self._canvas.draw_idle()
+        self._recalculate_lanes()
 
     def update_segment(self, seg_idx: int, label: str, color: str) -> None:
         """Update label text and fill colour (e.g. after player assignment)."""
@@ -294,10 +291,18 @@ class AnnotationTimeline(QWidget):
                 return i, "end"
         return None
 
-    def _hit_segment_body(self, x: float):
-        """Return seg_idx if x is inside a segment body, else -1."""
+    def _hit_segment_body(self, x: float, y: float | None = None) -> int:
+        """Return seg_idx if (x, y) is inside a segment body, else -1.
+
+        y is in axes fraction [0, 1]; pass None to ignore vertical position.
+        """
         for i, entry in enumerate(self._seg_data):
             if entry["start"] < x < entry["end"]:
+                if y is not None:
+                    ry = entry["rect"].get_y()
+                    rh = entry["rect"].get_height()
+                    if not (ry <= y <= ry + rh):
+                        continue
                 return i
         return -1
 
@@ -316,7 +321,7 @@ class AnnotationTimeline(QWidget):
         if event.button == 3:   # right-click — context menu on segment
             x = event.xdata
             if x is not None:
-                body_idx = self._hit_segment_body(x)
+                body_idx = self._hit_segment_body(x, event.ydata)
                 if body_idx >= 0:
                     self.delete_requested.emit(body_idx)
             return
@@ -331,7 +336,7 @@ class AnnotationTimeline(QWidget):
             return
 
         # 2. Segment body → activate
-        body_idx = self._hit_segment_body(x)
+        body_idx = self._hit_segment_body(x, event.ydata)
         if body_idx >= 0:
             self.set_active_segment(body_idx)
             self.segment_activated.emit(body_idx)
@@ -380,9 +385,7 @@ class AnnotationTimeline(QWidget):
         # Update visual
         entry["start" if side == "start" else "end"] = frame
         self._update_rect(seg_idx)
-
-        self._bg = None
-        self._canvas.draw_idle()
+        self._recalculate_lanes()
 
         self.boundary_dragged.emit(seg_idx, side, frame)
 
@@ -398,6 +401,7 @@ class AnnotationTimeline(QWidget):
         frame   = self._seg_data[seg_idx][side]
         self._drag = None
         self.boundary_committed.emit(seg_idx, side, frame)
+        self._recalculate_lanes()
 
     def _update_rect(self, seg_idx: int) -> None:
         entry = self._seg_data[seg_idx]
@@ -406,6 +410,46 @@ class AnnotationTimeline(QWidget):
         rect.set_x(start)
         rect.set_width(end - start)
         entry["text"].set_x((start + end) / 2)
+
+    def _recalculate_lanes(self) -> None:
+        """Assign non-overlapping vertical lanes to segments, stacking overlapping ones."""
+        n = len(self._seg_data)
+        if n == 0:
+            self._bg = None
+            self._canvas.draw_idle()
+            return
+
+        order = sorted(range(n), key=lambda i: self._seg_data[i]["start"])
+        lanes: list[int] = [-1] * n
+        lane_ends: list[int] = []
+
+        for i in order:
+            seg = self._seg_data[i]
+            assigned = next(
+                (li for li, le in enumerate(lane_ends) if seg["start"] >= le),
+                len(lane_ends),
+            )
+            if assigned == len(lane_ends):
+                lane_ends.append(seg["end"])
+            else:
+                lane_ends[assigned] = seg["end"]
+            lanes[i] = assigned
+
+        n_lanes   = len(lane_ends)
+        gap       = 0.01
+        total_h   = 0.90
+        lane_h    = (total_h - gap * (n_lanes - 1)) / n_lanes if n_lanes > 1 else total_h
+        lane_step = lane_h + gap if n_lanes > 1 else 0.0
+        bottom_y  = 0.05
+
+        for i, entry in enumerate(self._seg_data):
+            y = bottom_y + lanes[i] * lane_step
+            entry["rect"].set_y(y)
+            entry["rect"].set_height(lane_h)
+            entry["text"].set_y(y + lane_h / 2)
+
+        self._bg = None
+        self._canvas.draw_idle()
 
     # ------------------------------------------------------------------
     # Zoom (scroll-wheel + keyboard)

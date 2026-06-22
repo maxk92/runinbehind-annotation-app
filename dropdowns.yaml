@@ -1,0 +1,18 @@
+dropdowns:
+  - active: true
+    name: "Timing"
+    values:
+      - "proactive"
+      - "reactive"
+  - active: true
+    name: "Outcome"
+    values:
+      - "goal_opportunity"
+      - "scorebox_possession"
+      - "unsuccessful_pass"
+      - "no_pass"
+  - active: false
+    name: "Dropdown 3"
+    values:
+      - "value_1"
+      - "value_2"

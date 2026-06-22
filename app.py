@@ -60,6 +60,15 @@ class MainWindow(QMainWindow):
         self._home_color = HOME_COLOR
         self._away_color = AWAY_COLOR
 
+        # Annotator name
+        self._annotator_name: str = ""
+
+        # Dropdown config (loaded from dropdowns.yaml at startup)
+        self._dropdown_configs: list = self._load_dropdown_config()   # active only, max 3
+        self._dropdown_widgets: list = []   # list of (QLabel, QComboBox)
+        self._pending_dropdown_values: list = ["none"] * len(self._dropdown_configs)
+        self._dm.dropdown_names = [d["name"] for d in self._dropdown_configs]
+
         self._build_ui()
 
     # ------------------------------------------------------------------
@@ -143,6 +152,19 @@ class MainWindow(QMainWindow):
         self._apply_btn_color(self._btn_away_color, self._away_color)
         ctrl_row.addWidget(self._btn_away_color)
 
+        ctrl_row.addSpacing(16)
+
+        ctrl_row.addWidget(QLabel("Annotator:", self))
+        self._annotator_edit = QLineEdit(self)
+        self._annotator_edit.setPlaceholderText("Your name…")
+        self._annotator_edit.setFixedWidth(150)
+        ctrl_row.addWidget(self._annotator_edit)
+
+        btn_save_name = QPushButton("Save Name", self)
+        btn_save_name.setFixedWidth(90)
+        btn_save_name.clicked.connect(self._on_save_name)
+        ctrl_row.addWidget(btn_save_name)
+
         ctrl_row.addStretch()
 
         self._btn_undo = QPushButton("Undo", self)
@@ -206,6 +228,24 @@ class MainWindow(QMainWindow):
         self._btn_other.setVisible(False)
         self._btn_other.clicked.connect(self._on_outcome_other)
         annot_row.addWidget(self._btn_other)
+
+        for dd in self._dropdown_configs:
+            lbl = QLabel(dd["name"] + ":", self)
+            lbl.setVisible(False)
+            combo = QComboBox(self)
+            combo.addItem("none")
+            for val in dd.get("values", []):
+                combo.addItem(str(val))
+            combo.setMinimumWidth(120)
+            combo.setVisible(False)
+            dd_idx = len(self._dropdown_widgets)
+            combo.currentTextChanged.connect(
+                lambda text, i=dd_idx: self._on_dropdown_changed(i, text)
+            )
+            annot_row.addSpacing(8)
+            annot_row.addWidget(lbl)
+            annot_row.addWidget(combo)
+            self._dropdown_widgets.append((lbl, combo))
 
         annot_row.addStretch()
         vid_layout.addLayout(annot_row)
@@ -345,11 +385,12 @@ class MainWindow(QMainWindow):
         self._half_combo.blockSignals(False)
 
         # Reset state
-        self._annotating      = False
-        self._pending_start   = -1
-        self._pending_player  = None
-        self._pending_outcome = ""
-        self._active_seg_idx  = -1
+        self._annotating               = False
+        self._pending_start            = -1
+        self._pending_player           = None
+        self._pending_outcome          = ""
+        self._pending_dropdown_values  = ["none"] * len(self._dropdown_configs)
+        self._active_seg_idx           = -1
         self._btn_annotate.setText("▶  Start Segment")
         self._btn_annotate.setStyleSheet("font-size: 13px;")
         self._update_outcome_buttons()
@@ -405,12 +446,13 @@ class MainWindow(QMainWindow):
 
         if not self._annotating:
             # Start
-            self._pending_start   = max(self._dm.first_frame,
-                                        min(self._dm.last_frame,
-                                            self._video_panel.current_frame()))
-            self._pending_player  = None
-            self._pending_outcome = ""
-            self._annotating      = True
+            self._pending_start          = max(self._dm.first_frame,
+                                               min(self._dm.last_frame,
+                                                   self._video_panel.current_frame()))
+            self._pending_player         = None
+            self._pending_outcome        = ""
+            self._pending_dropdown_values = ["none"] * len(self._dropdown_configs)
+            self._annotating             = True
             self._active_seg_idx  = -1        # deactivate any active segment
             self._timeline.set_active_segment(-1)
             self._btn_annotate.setText("■  End Segment")
@@ -434,6 +476,7 @@ class MainWindow(QMainWindow):
 
             seg = self._dm.add_segment(start, end)
             seg_idx = len(self._dm.segments) - 1
+            seg.dropdown_values = [combo.currentText() for _, combo in self._dropdown_widgets]
 
             # Determine label and color from pending player
             color = "#AAAAAA"
@@ -495,18 +538,30 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _update_outcome_buttons(self) -> None:
-        """Show/hide and style the outcome toggle buttons based on active state."""
+        """Show/hide and style the outcome toggle buttons and dropdowns based on active state."""
         active = self._annotating or self._active_seg_idx >= 0
         self._btn_running.setVisible(active)
         self._btn_other.setVisible(active)
+        for lbl, combo in self._dropdown_widgets:
+            lbl.setVisible(active)
+            combo.setVisible(active)
         if not active:
             return
         if self._annotating:
-            outcome = self._pending_outcome
+            outcome   = self._pending_outcome
+            dd_values = self._pending_dropdown_values
         else:
-            outcome = self._dm.segments[self._active_seg_idx].outcome
+            seg       = self._dm.segments[self._active_seg_idx]
+            outcome   = seg.outcome
+            dd_values = seg.dropdown_values
         self._style_outcome_btn(self._btn_running, outcome == "running_player_received")
         self._style_outcome_btn(self._btn_other,   outcome == "other_player_received")
+        for i, (_, combo) in enumerate(self._dropdown_widgets):
+            combo.blockSignals(True)
+            val = dd_values[i] if i < len(dd_values) else "none"
+            idx = combo.findText(val)
+            combo.setCurrentIndex(idx if idx >= 0 else 0)
+            combo.blockSignals(False)
 
     @staticmethod
     def _style_outcome_btn(btn: QPushButton, selected: bool) -> None:
@@ -663,12 +718,51 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("No segments to save.", 3000)
             return
         try:
-            out_path = self._dm.save()
+            out_path = self._dm.save(annotator_name=self._annotator_name)
             self.statusBar().showMessage(
                 f"Saved {len(self._dm.segments)} segments → {out_path}", 6000
             )
         except Exception as exc:
             QMessageBox.critical(self, "Save failed", str(exc))
+
+    # ------------------------------------------------------------------
+    # Annotator name
+    # ------------------------------------------------------------------
+
+    def _on_save_name(self) -> None:
+        self._annotator_name = self._annotator_edit.text().strip()
+        self.statusBar().showMessage(
+            f"Annotator name saved: '{self._annotator_name}'", 3000
+        )
+
+    # ------------------------------------------------------------------
+    # Dropdown menus
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _load_dropdown_config() -> list:
+        try:
+            import yaml
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dropdowns.yaml")
+            if not os.path.exists(path):
+                return []
+            with open(path) as f:
+                raw = yaml.safe_load(f) or {}
+            active = [d for d in raw.get("dropdowns", []) if d.get("active", False)]
+            return active[:3]
+        except Exception:
+            return []
+
+    def _on_dropdown_changed(self, dropdown_idx: int, value: str) -> None:
+        if self._annotating:
+            while len(self._pending_dropdown_values) <= dropdown_idx:
+                self._pending_dropdown_values.append("none")
+            self._pending_dropdown_values[dropdown_idx] = value
+        elif self._active_seg_idx >= 0:
+            seg = self._dm.segments[self._active_seg_idx]
+            while len(seg.dropdown_values) <= dropdown_idx:
+                seg.dropdown_values.append("none")
+            seg.dropdown_values[dropdown_idx] = value
 
     # ------------------------------------------------------------------
     # Helpers

@@ -31,6 +31,7 @@ class Segment:
     player_jid:  str  = ""
     team:        str  = ""
     outcome:     str  = ""    # "running_player_received" | "other_player_received" | ""
+    dropdown_values: list = field(default_factory=list)
 
 
 class DataManager:
@@ -47,8 +48,9 @@ class DataManager:
 
         self._positions_path: str = ""
 
-        self.segments:  list[Segment] = []
-        self._next_id:  int = 0
+        self.segments:       list[Segment] = []
+        self._next_id:       int = 0
+        self.dropdown_names: list[str] = []
 
     # ------------------------------------------------------------------
     # Loading
@@ -213,14 +215,21 @@ class DataManager:
         new_segs: list[Segment] = []
         for _, row in df.iterrows():
             outcome_raw = str(row["outcome"]) if "outcome" in row and not _isnan(row["outcome"]) else "none_received"
+            dd_values = []
+            for name in self.dropdown_names:
+                if name in row and not _isnan(row[name]):
+                    dd_values.append(str(row[name]))
+                else:
+                    dd_values.append("none")
             seg = Segment(
-                segment_id  = int(row["segment_id"]),
-                start_frame = int(row["start_frame"]),
-                end_frame   = int(row["end_frame"]),
-                player_name = str(row["player"])     if "player"     in row and not _isnan(row["player"])     else "",
-                player_jid  = str(row["player_jid"]) if "player_jid" in row and not _isnan(row["player_jid"]) else "",
-                team        = str(row["team"])        if "team"       in row and not _isnan(row["team"])       else "",
-                outcome     = "" if outcome_raw == "none_received" else outcome_raw,
+                segment_id      = int(row["segment_id"]),
+                start_frame     = int(row["start_frame"]),
+                end_frame       = int(row["end_frame"]),
+                player_name     = str(row["player"])     if "player"     in row and not _isnan(row["player"])     else "",
+                player_jid      = str(row["player_jid"]) if "player_jid" in row and not _isnan(row["player_jid"]) else "",
+                team            = str(row["team"])        if "team"       in row and not _isnan(row["team"])       else "",
+                outcome         = "" if outcome_raw == "none_received" else outcome_raw,
+                dropdown_values = dd_values,
             )
             self.segments.append(seg)
             new_segs.append(seg)
@@ -234,13 +243,16 @@ class DataManager:
     # Saving
     # ------------------------------------------------------------------
 
-    def save(self, custom_path: str = "") -> str:
+    def save(self, annotator_name: str = "", custom_path: str = "") -> str:
         import datetime
+        import re
         import pandas as pd
 
-        rows = [
-            {
+        rows = []
+        for s in self.segments:
+            row = {
                 "segment_id":        s.segment_id,
+                "annotator":         annotator_name,
                 "half":              self.half,
                 "start_frame":       s.start_frame,
                 "end_frame":         s.end_frame,
@@ -253,8 +265,10 @@ class DataManager:
                 "outcome":           s.outcome if s.outcome else "none_received",
                 "annotation_source": "manual",
             }
-            for s in self.segments
-        ]
+            for i, name in enumerate(self.dropdown_names):
+                row[name] = s.dropdown_values[i] if i < len(s.dropdown_values) else "none"
+            rows.append(row)
+
         df = pd.DataFrame(rows)
 
         if custom_path:
@@ -264,7 +278,11 @@ class DataManager:
             stem      = os.path.splitext(os.path.basename(self._positions_path))[0]
             match_id  = stem.split("_")[-1]
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            out_path  = os.path.join(OUTPUT_DIR, f"{match_id}_{timestamp}.csv")
+            if annotator_name:
+                safe_name = re.sub(r"[^\w]", "_", annotator_name.strip())
+                out_path  = os.path.join(OUTPUT_DIR, f"{match_id}_{self.half}_{safe_name}_{timestamp}.csv")
+            else:
+                out_path  = os.path.join(OUTPUT_DIR, f"{match_id}_{self.half}_{timestamp}.csv")
 
         df.to_csv(out_path, index=False)
         return out_path
