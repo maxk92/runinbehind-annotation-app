@@ -5,12 +5,15 @@ DataManager for rib-annotation-app.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
 
-from config import FPS, OUTPUT_DIR, TRAIL_STEPS
+from config import AWAY_COLOR, FPS, HOME_COLOR, OUTPUT_DIR, TRAIL_STEPS
+
+_HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 
 def _isnan(val) -> bool:
@@ -19,6 +22,10 @@ def _isnan(val) -> bool:
         return np.isnan(float(val))
     except (TypeError, ValueError):
         return False
+
+
+def _is_valid_hex(s) -> bool:
+    return isinstance(s, str) and bool(_HEX_COLOR_RE.match(s))
 
 
 @dataclass
@@ -30,7 +37,6 @@ class Segment:
     player_name: str  = ""
     player_jid:  str  = ""
     team:        str  = ""
-    outcome:     str  = ""    # "running_player_received" | "other_player_received" | ""
     dropdown_values: list = field(default_factory=list)
 
 
@@ -47,6 +53,7 @@ class DataManager:
         self.available_halves: list[str] = []
 
         self._positions_path: str = ""
+        self._mat_info_path:  str = ""
 
         self.segments:       list[Segment] = []
         self._next_id:       int = 0
@@ -65,6 +72,7 @@ class DataManager:
         )
 
         self._positions_path  = filepath_positions
+        self._mat_info_path   = filepath_mat_info
         self.available_halves = list(xy_objects.keys())
         self.half = half if half in xy_objects else self.available_halves[0]
 
@@ -78,6 +86,30 @@ class DataManager:
         self.n_frames  = len(self.xy_home.xy) if self.xy_home is not None else 0
         self.segments  = []
         self._next_id  = 0
+
+    def get_team_colors(self) -> dict[str, str]:
+        """Parse home/away shirt colors from the matchinfo XML.
+
+        Falls back to config defaults if missing or unparseable — floodlight's
+        own XML parser doesn't expose team colors, so this reads the raw XML
+        directly.
+        """
+        import xml.etree.ElementTree as ET
+
+        colors = {"Home": HOME_COLOR, "Away": AWAY_COLOR}
+        if not self._mat_info_path:
+            return colors
+        try:
+            root = ET.parse(self._mat_info_path).getroot()
+        except (ET.ParseError, OSError):
+            return colors
+        role_map = {"home": "Home", "guest": "Away"}
+        for team_el in root.iter("Team"):
+            key   = role_map.get(team_el.get("Role", "").lower())
+            color = team_el.get("PlayerShirtMainColor")
+            if key and _is_valid_hex(color):
+                colors[key] = color
+        return colors
 
     # ------------------------------------------------------------------
     # Teamsheet helpers
@@ -180,10 +212,6 @@ class DataManager:
             s.player_jid  = player_jid
             s.team        = team
 
-    def assign_outcome(self, seg_idx: int, outcome: str) -> None:
-        if 0 <= seg_idx < len(self.segments):
-            self.segments[seg_idx].outcome = outcome
-
     def update_boundary(self, seg_idx: int, side: str, frame: int) -> None:
         if not (0 <= seg_idx < len(self.segments)):
             return
@@ -214,7 +242,6 @@ class DataManager:
 
         new_segs: list[Segment] = []
         for _, row in df.iterrows():
-            outcome_raw = str(row["outcome"]) if "outcome" in row and not _isnan(row["outcome"]) else "none_received"
             dd_values = []
             for name in self.dropdown_names:
                 if name in row and not _isnan(row[name]):
@@ -228,7 +255,6 @@ class DataManager:
                 player_name     = str(row["player"])     if "player"     in row and not _isnan(row["player"])     else "",
                 player_jid      = str(row["player_jid"]) if "player_jid" in row and not _isnan(row["player_jid"]) else "",
                 team            = str(row["team"])        if "team"       in row and not _isnan(row["team"])       else "",
-                outcome         = "" if outcome_raw == "none_received" else outcome_raw,
                 dropdown_values = dd_values,
             )
             self.segments.append(seg)
@@ -262,7 +288,6 @@ class DataManager:
                 "player":            s.player_name,
                 "player_jid":        s.player_jid,
                 "team":              s.team,
-                "outcome":           s.outcome if s.outcome else "none_received",
                 "annotation_source": "manual",
             }
             for i, name in enumerate(self.dropdown_names):

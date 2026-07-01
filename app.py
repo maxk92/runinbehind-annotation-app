@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import sys
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QEvent
 from PySide6.QtGui import QColor, QCursor
 from PySide6.QtWidgets import (
     QApplication,
@@ -51,7 +51,6 @@ class MainWindow(QMainWindow):
         self._annotating:      bool = False
         self._pending_start:   int  = -1
         self._pending_player:  dict | None = None   # player clicked while annotating
-        self._pending_outcome: str  = ""            # outcome selected while annotating
 
         # Post-annotation state
         self._active_seg_idx: int = -1   # segment activated for player assignment
@@ -64,12 +63,13 @@ class MainWindow(QMainWindow):
         self._annotator_name: str = ""
 
         # Dropdown config (loaded from dropdowns.yaml at startup)
-        self._dropdown_configs: list = self._load_dropdown_config()   # active only, max 3
+        self._dropdown_configs: list = self._load_dropdown_config()   # active only
         self._dropdown_widgets: list = []   # list of (QLabel, QComboBox)
         self._pending_dropdown_values: list = ["none"] * len(self._dropdown_configs)
         self._dm.dropdown_names = [d["name"] for d in self._dropdown_configs]
 
         self._build_ui()
+        QApplication.instance().installEventFilter(self)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -213,29 +213,15 @@ class MainWindow(QMainWindow):
 
         annot_row.addSpacing(12)
 
-        self._btn_running = QPushButton("Running Player Received", self)
-        self._btn_running.setMinimumHeight(38)
-        self._btn_running.setStyleSheet("font-size: 12px;")
-        self._btn_running.setVisible(False)
-        self._btn_running.clicked.connect(self._on_outcome_running)
-        annot_row.addWidget(self._btn_running)
-
-        annot_row.addSpacing(4)
-
-        self._btn_other = QPushButton("Other Player Received", self)
-        self._btn_other.setMinimumHeight(38)
-        self._btn_other.setStyleSheet("font-size: 12px;")
-        self._btn_other.setVisible(False)
-        self._btn_other.clicked.connect(self._on_outcome_other)
-        annot_row.addWidget(self._btn_other)
-
         for dd in self._dropdown_configs:
             lbl = QLabel(dd["name"] + ":", self)
             lbl.setVisible(False)
             combo = QComboBox(self)
-            combo.addItem("none")
             for val in dd.get("values", []):
                 combo.addItem(str(val))
+            combo.setPlaceholderText("(none)")
+            combo.setCurrentIndex(-1)
+            combo.setStyleSheet("QComboBox:focus { border: 1px solid lightblue; }")
             combo.setMinimumWidth(120)
             combo.setVisible(False)
             dd_idx = len(self._dropdown_widgets)
@@ -375,6 +361,12 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Load failed.", 4000)
             return
 
+        extracted = self._dm.get_team_colors()
+        self._home_color = extracted["Home"]
+        self._away_color = extracted["Away"]
+        self._apply_btn_color(self._btn_home_color, self._home_color)
+        self._apply_btn_color(self._btn_away_color, self._away_color)
+
         # Sync half combo
         current = self._half_combo.currentText()
         self._half_combo.blockSignals(True)
@@ -388,12 +380,11 @@ class MainWindow(QMainWindow):
         self._annotating               = False
         self._pending_start            = -1
         self._pending_player           = None
-        self._pending_outcome          = ""
         self._pending_dropdown_values  = ["none"] * len(self._dropdown_configs)
         self._active_seg_idx           = -1
         self._btn_annotate.setText("▶  Start Segment")
         self._btn_annotate.setStyleSheet("font-size: 13px;")
-        self._update_outcome_buttons()
+        self._update_dropdown_widgets()
 
         # Init pitch
         home_jids = self._dm.get_jersey_ids("Home")
@@ -450,7 +441,6 @@ class MainWindow(QMainWindow):
                                                min(self._dm.last_frame,
                                                    self._video_panel.current_frame()))
             self._pending_player         = None
-            self._pending_outcome        = ""
             self._pending_dropdown_values = ["none"] * len(self._dropdown_configs)
             self._annotating             = True
             self._active_seg_idx  = -1        # deactivate any active segment
@@ -461,7 +451,7 @@ class MainWindow(QMainWindow):
                 "font-size: 13px; font-weight: bold;"
             )
             self._timeline.set_pending_start(self._pending_start)
-            self._update_outcome_buttons()
+            self._update_dropdown_widgets()
             self.statusBar().showMessage(
                 f"Recording… start frame {self._pending_start}.  "
                 "Click a player on the pitch to assign, then 'End Segment'.", 0
@@ -476,7 +466,7 @@ class MainWindow(QMainWindow):
 
             seg = self._dm.add_segment(start, end)
             seg_idx = len(self._dm.segments) - 1
-            seg.dropdown_values = [combo.currentText() for _, combo in self._dropdown_widgets]
+            seg.dropdown_values = [combo.currentText() or "none" for _, combo in self._dropdown_widgets]
 
             # Determine label and color from pending player
             color = "#AAAAAA"
@@ -487,19 +477,15 @@ class MainWindow(QMainWindow):
                 label = pp["jID"]
                 self._dm.assign_player(seg_idx, pp["player"], pp["jID"], pp["team"])
 
-            if self._pending_outcome:
-                self._dm.assign_outcome(seg_idx, self._pending_outcome)
-
             self._timeline.clear_pending_start()
             self._timeline.add_segment(start, end, seg.segment_id, label, color)
 
             self._annotating      = False
             self._pending_start   = -1
             self._pending_player  = None
-            self._pending_outcome = ""
             self._btn_annotate.setText("▶  Start Segment")
             self._btn_annotate.setStyleSheet("font-size: 13px;")
-            self._update_outcome_buttons()
+            self._update_dropdown_widgets()
 
             dur = (end - start) / FPS
             player_str = f"  [{label}]" if label else ""
@@ -514,11 +500,10 @@ class MainWindow(QMainWindow):
             self._annotating      = False
             self._pending_start   = -1
             self._pending_player  = None
-            self._pending_outcome = ""
             self._btn_annotate.setText("▶  Start Segment")
             self._btn_annotate.setStyleSheet("font-size: 13px;")
             self._timeline.clear_pending_start()
-            self._update_outcome_buttons()
+            self._update_dropdown_widgets()
             self.statusBar().showMessage("Annotation cancelled.", 3000)
             return
 
@@ -526,7 +511,7 @@ class MainWindow(QMainWindow):
         if seg is not None:
             if self._active_seg_idx == len(self._dm.segments):
                 self._active_seg_idx = -1
-                self._update_outcome_buttons()
+                self._update_dropdown_widgets()
             self._timeline.remove_last_segment()
             self.statusBar().showMessage(f"Removed segment #{seg.segment_id}.", 3000)
         else:
@@ -534,58 +519,28 @@ class MainWindow(QMainWindow):
         self._update_seg_info()
 
     # ------------------------------------------------------------------
-    # Outcome buttons
+    # Dropdowns
     # ------------------------------------------------------------------
 
-    def _update_outcome_buttons(self) -> None:
-        """Show/hide and style the outcome toggle buttons and dropdowns based on active state."""
+    def _update_dropdown_widgets(self) -> None:
+        """Show/hide and sync the dropdowns based on active (annotating / segment-selected) state."""
         active = self._annotating or self._active_seg_idx >= 0
-        self._btn_running.setVisible(active)
-        self._btn_other.setVisible(active)
         for lbl, combo in self._dropdown_widgets:
             lbl.setVisible(active)
             combo.setVisible(active)
         if not active:
             return
         if self._annotating:
-            outcome   = self._pending_outcome
             dd_values = self._pending_dropdown_values
         else:
             seg       = self._dm.segments[self._active_seg_idx]
-            outcome   = seg.outcome
             dd_values = seg.dropdown_values
-        self._style_outcome_btn(self._btn_running, outcome == "running_player_received")
-        self._style_outcome_btn(self._btn_other,   outcome == "other_player_received")
         for i, (_, combo) in enumerate(self._dropdown_widgets):
             combo.blockSignals(True)
             val = dd_values[i] if i < len(dd_values) else "none"
-            idx = combo.findText(val)
-            combo.setCurrentIndex(idx if idx >= 0 else 0)
+            idx = combo.findText(val) if val != "none" else -1
+            combo.setCurrentIndex(idx)
             combo.blockSignals(False)
-
-    @staticmethod
-    def _style_outcome_btn(btn: QPushButton, selected: bool) -> None:
-        if selected:
-            btn.setStyleSheet(
-                "background-color: #27AE60; color: white; "
-                "font-size: 12px; font-weight: bold;"
-            )
-        else:
-            btn.setStyleSheet("font-size: 12px;")
-
-    def _on_outcome_running(self) -> None:
-        self._toggle_outcome("running_player_received")
-
-    def _on_outcome_other(self) -> None:
-        self._toggle_outcome("other_player_received")
-
-    def _toggle_outcome(self, value: str) -> None:
-        if self._annotating:
-            self._pending_outcome = "" if self._pending_outcome == value else value
-        elif self._active_seg_idx >= 0:
-            seg = self._dm.segments[self._active_seg_idx]
-            seg.outcome = "" if seg.outcome == value else value
-        self._update_outcome_buttons()
 
     # ------------------------------------------------------------------
     # Player assignment
@@ -622,7 +577,7 @@ class MainWindow(QMainWindow):
 
     def _on_segment_activated(self, seg_idx: int) -> None:
         self._active_seg_idx = seg_idx
-        self._update_outcome_buttons()
+        self._update_dropdown_widgets()
         if 0 <= seg_idx < len(self._dm.segments):
             seg = self._dm.segments[seg_idx]
             self.statusBar().showMessage(
@@ -643,7 +598,7 @@ class MainWindow(QMainWindow):
         self._timeline.remove_segment(seg_idx)
         if self._active_seg_idx == seg_idx:
             self._active_seg_idx = -1
-            self._update_outcome_buttons()
+            self._update_dropdown_widgets()
         elif self._active_seg_idx > seg_idx:
             self._active_seg_idx -= 1
         self.statusBar().showMessage(f"Deleted segment #{seg.segment_id}.", 3000)
@@ -655,11 +610,42 @@ class MainWindow(QMainWindow):
         if menu.exec(QCursor.pos()) == act_delete:
             self._delete_segment(seg_idx)
 
-    def keyPressEvent(self, event) -> None:
-        if event.key() == Qt.Key.Key_Delete and self._active_seg_idx >= 0:
-            self._delete_segment(self._active_seg_idx)
-        else:
-            super().keyPressEvent(event)
+    def eventFilter(self, obj, event) -> bool:
+        if event.type() == QEvent.Type.KeyPress:
+            focus = QApplication.focusWidget()
+            if isinstance(focus, QLineEdit):
+                return super().eventFilter(obj, event)
+
+            key = event.key()
+            if key == Qt.Key.Key_Space:
+                self._on_annotate()
+                return True
+
+            if key == Qt.Key.Key_Delete and self._active_seg_idx >= 0:
+                self._delete_segment(self._active_seg_idx)
+                return True
+
+            segment_active = self._annotating or self._active_seg_idx >= 0
+            if segment_active and key in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
+                self._focus_adjacent_dropdown(forward=key == Qt.Key.Key_Tab)
+                return True
+
+            if segment_active and Qt.Key.Key_1 <= key <= Qt.Key.Key_9:
+                n = key - Qt.Key.Key_0
+                if n <= len(self._dropdown_widgets):
+                    self._dropdown_widgets[n - 1][1].setFocus()
+                    return True
+
+        return super().eventFilter(obj, event)
+
+    def _focus_adjacent_dropdown(self, forward: bool) -> None:
+        combos = [c for _, c in self._dropdown_widgets]
+        if not combos:
+            return
+        focus = QApplication.focusWidget()
+        idx = combos.index(focus) if focus in combos else (-1 if forward else 0)
+        new_idx = (idx + 1) % len(combos) if forward else (idx - 1) % len(combos)
+        combos[new_idx].setFocus()
 
     # ------------------------------------------------------------------
     # Boundary drag
@@ -748,12 +734,12 @@ class MainWindow(QMainWindow):
                 return []
             with open(path) as f:
                 raw = yaml.safe_load(f) or {}
-            active = [d for d in raw.get("dropdowns", []) if d.get("active", False)]
-            return active[:3]
+            return [d for d in raw.get("dropdowns", []) if d.get("active", False)]
         except Exception:
             return []
 
     def _on_dropdown_changed(self, dropdown_idx: int, value: str) -> None:
+        value = value or "none"
         if self._annotating:
             while len(self._pending_dropdown_values) <= dropdown_idx:
                 self._pending_dropdown_values.append("none")
